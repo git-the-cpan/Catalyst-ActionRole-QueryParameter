@@ -1,5 +1,9 @@
 Revision history for Perl extension Catalyst::ActionRole::QueryParameter
 
+0.06    05 May 2015
+        - Fixed a bug that might cause us to mess up captures when applied to an
+        action that was in the middle of a chain (and had captures).
+
 0.05    27 April 2015
         - match_captures is now always defined in Catalyst::Action so we changed
         the role to not overwrite it.

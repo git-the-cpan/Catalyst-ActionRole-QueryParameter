@@ -1,6 +1,6 @@
 package Catalyst::ActionRole::QueryParameter;
 
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 
 use 5.008008;
 use Moose::Role;
@@ -13,7 +13,7 @@ sub _resolve_query_attrs {
 }
 
 around $_, sub {
-  my ($orig, $self, $ctx) = @_;
+  my ($orig, $self, $ctx, @more) = @_;
   if(my @attrs = $self->_resolve_query_attrs) {
 
     my @matched = grep { $_ } map {
@@ -48,12 +48,12 @@ around $_, sub {
     } @attrs;
 
     if( scalar(@matched) == scalar(@attrs) ) {
-      return $self->$orig($ctx);
+      return $self->$orig($ctx, @more);
     } else {
       return 0;
     }
   } else {
-    return $self->$orig($ctx);
+    return $self->$orig($ctx, @more);
   }
 } for qw(match match_captures);
 
@@ -248,7 +248,7 @@ L<Catalyst>, L<Catalyst::Controller::ActionRole>, L<Moose>.
 
 =head1 COPYRIGHT & LICENSE
 
-Copyright 2011, John Napiorkowski L<email:jjnapiork@cpan.org>
+Copyright 2015, John Napiorkowski L<email:jjnapiork@cpan.org>
 
 This library is free software; you can redistribute it and/or modify it under
 the same terms as Perl itself.
