@@ -1,35 +1,27 @@
 ---
-abstract: 'Dispatch rules using query parameters'
+abstract: 'Constraints for your Query parameters'
 author:
-  - 'John Napiorkowski L<email:jjnapiork@cpan.org>'
+  - 'John Napiorkowski <jjnapiork@cpan.org>'
 build_requires:
-  Catalyst: 0
-  Catalyst::Test: 0
-  ExtUtils::MakeMaker: 6.59
-  HTTP::Request::Common: 0
-  Moose: 0
-  Test::More: '0.96'
+  Catalyst: '5.90103'
+  HTTP::Request::Common: '0'
+  Test::Most: '0'
+  Type::Tiny: '1.000005'
 configure_requires:
-  ExtUtils::MakeMaker: 6.59
-distribution_type: module
-dynamic_config: 1
-generated_by: 'Module::Install version 1.14'
+  ExtUtils::MakeMaker: '0'
+dynamic_config: 0
+generated_by: 'Dist::Zilla version 5.041, CPAN::Meta::Converter version 2.150005'
 license: perl
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.4.html
-  version: 1.4
-module_name: Catalyst::ActionRole::QueryParameter
+  version: '1.4'
 name: Catalyst-ActionRole-QueryParameter
-no_index:
-  directory:
-    - inc
-    - t
 requires:
-  Moose: 0
-  namespace::autoclean: 0
-  perl: 5.8.8
+  Catalyst: '5.90103'
+  Moose: '2.000002'
+  Scalar::Util: '0'
 resources:
-  homepage: http://search.cpan.org/dist/Catalyst-ActionRole-QueryParameter/
-  license: http://dev.perl.org/licenses/
-  repository: https://github.com/jjn1056/Catalyst-ActionRole-QueryParameters.git
-version: '0.06'
+  bugtracker: https://github.com/jjn1056/Catalyst-ActionRole-QueryParameter/issues
+  homepage: https://github.com/jjn1056/Catalyst-ActionRole-QueryParameter
+  repository: https://github.com/jjn1056/Catalyst-ActionRole-QueryParameter.git
+version: '0.07'

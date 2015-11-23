@@ -1,60 +1,106 @@
 package Catalyst::ActionRole::QueryParameter;
 
-our $VERSION = '0.06';
-
-use 5.008008;
 use Moose::Role;
-use namespace::autoclean;
-
+use Scalar::Util ();
 requires 'attributes', 'match', 'match_captures';
+
+our $VERSION = '0.07';
 
 sub _resolve_query_attrs {
   @{shift->attributes->{QueryParam} || []};
 }
 
+has query_constraints => (
+  is=>'ro',
+  required=>1,
+  isa=>'HashRef',
+  lazy=>1,
+  builder=>'_prepare_query_constraints');
+
+  sub _prepare_query_constraints {
+    my ($self) = @_;
+
+    my @constraints;
+    my $compare = sub {
+      my ($op, $cond) = @_;
+
+      if(defined $cond && length $cond && !defined $op) {
+        die "You must use a newer version of Catalyst (5.90090+) if you want to use Type Constraint '$cond'"
+          unless $self->can('resolve_type_constraint');
+        my ($tc) = $self->resolve_type_constraint($cond);
+        die "We think $cond is a type constraint, but its not" unless $tc;
+        return sub { $tc->check(shift) };
+      }
+
+      if(defined $op) {
+        die "No such op of $op" unless $op =~m/^(==|eq|!=|<=|>=|>|=~|<|gt|ge|lt|le)$/i;
+        # we have an $op, make sure there's a comparator
+        die "You can't have an operator without a target condition" unless defined($cond);
+      } else {
+        # No op mean the field just need to exist with a defined value
+        return sub { defined(shift) };
+      }
+
+      return sub { my $v = shift; return defined($v) ? (Scalar::Util::looks_like_number($v) && ($v == $cond)) : 0 } if $op eq '==';
+      return sub { my $v = shift; return defined($v) ? (Scalar::Util::looks_like_number($v) && ($v != $cond)) : 0 } if $op eq '!=';
+      return sub { my $v = shift; return defined($v) ? (Scalar::Util::looks_like_number($v) && ($v <= $cond)) : 0 } if $op eq '<=';
+      return sub { my $v = shift; return defined($v) ? (Scalar::Util::looks_like_number($v) && ($v >= $cond)) : 0 } if $op eq '>=';
+      return sub { my $v = shift; return defined($v) ? (Scalar::Util::looks_like_number($v) && ($v > $cond)) : 0 } if $op eq '>';
+      return sub { my $v = shift; return defined($v) ? (Scalar::Util::looks_like_number($v) && ($v < $cond)) : 0 } if $op eq '<';
+      return sub { my $v = shift; return defined($v) ? ($v =~ $cond) : 0 } if $op eq '=~';
+      return sub { my $v = shift; return defined($v) ? ($v ge $cond) : 0 } if $op eq 'ge';
+      return sub { my $v = shift; return defined($v) ? ($v lt $cond) : 0 } if $op eq 'lt';
+      return sub { my $v = shift; return defined($v) ? ($v le $cond) : 0 } if $op eq 'le';
+      return sub { my $v = shift; return defined($v) ? ($v eq $cond) : 0 } if $op eq 'eq';
+
+      die "your op '$op' is not allowed!";
+    };
+
+    if(my @attrs = $self->_resolve_query_attrs) {
+      my %matched = map {
+        my ($not, $attr_param, $op, $cond) =
+            ref($_) eq 'ARRAY' ?
+            ($_[0] eq '!' ? (@$_) :(0, @$_)) :
+            ($_=~m/^(\!?)([^\:]+)\:?(==|eq|!=|<=|>=|>|=~|<|gt|ge|lt|le)?(.*)$/);
+
+        my $evaluator = $compare->($op, $cond);
+
+        $attr_param => [ $not, $attr_param, $op, $cond, sub {
+          my $state = $evaluator->(shift);          
+          return $not ? not($state) : $state;
+        }];
+      } @attrs;
+      return \%matched;
+    } else {
+      return +{};
+    }
+  }
+
 around $_, sub {
   my ($orig, $self, $ctx, @more) = @_;
-  if(my @attrs = $self->_resolve_query_attrs) {
 
-    my @matched = grep { $_ } map {
-      my ($not, $attr_param, $op, $cond) =
-          ref($_) eq 'ARRAY' ?
-          ($_[0] eq '!' ? (@$_) :(0, @$_)) :
-          ($_=~m/^(\!?)([^\:]+)\:?(==|eq|!=|<=|>=|>|=~|<|gt|ge|lt|le)?(.*)$/);
+  foreach my $constrained (keys %{$self->query_constraints}) {
+    my ($not, $attr_param, $op, $cond, $evaluator) = @{$self->query_constraints->{$constrained}};
+    my $req_value = exists($ctx->req->query_parameters->{$constrained}) ? 
+      $ctx->req->query_parameters->{$constrained} : undef;
 
-      my $req_param = $ctx->req->query_parameters->{$attr_param};
+    my $is_success = $evaluator->($req_value) ||0;
 
-      if($ctx->debug) {
-        $ctx->log->debug(
-          sprintf "QueryParam value for $self parsed as: %s %s %s %s",
-            ($not ? 'not' : 'is'), $attr_param, ($op ? $op:''), ($cond ? $cond:''),
-        );
-      }
-
-      if($req_param && $op && $cond) {
-        my $evaluated;
-        $cond = $op=~/eq|gt|ge|lt|le/ ? '"$cond"' : $cond;
-        my $success = eval "\$evaluated = $req_param $op $cond; 1";
-        if($success) {
-            $not ?! $evaluated : $evaluated;
-        } else {
-            $ctx->log->debug("Evaluating your QueryParam value generated an error: $@")
-              if $ctx->debug;
-            undef;
-        }
-      } else {
-        $not ?!$req_param : $req_param;
-      }
-    } @attrs;
-
-    if( scalar(@matched) == scalar(@attrs) ) {
-      return $self->$orig($ctx, @more);
-    } else {
-      return 0;
+    if($ctx->debug) {
+      my $display_req_value = defined($req_value) ? $req_value : 'undefined';
+      $ctx->log->debug(
+        sprintf "QueryParam value for action $self, param '$constrained' with value '$display_req_value' compared as: %s %s %s '%s'",
+          ($not ? 'not' : 'is'), $attr_param, ($op ? $op:''), ($cond ? $cond:''),
+      );
+      $ctx->log->debug("QueryParam for $self on key $constrained value $display_req_value has success of $is_success");
     }
-  } else {
-    return $self->$orig($ctx, @more);
+
+    #If we fail once, game over;
+    return 0 unless $is_success;
+    
   }
+  return $self->$orig($ctx, @more);
+  #If we get this far, its all good
 } for qw(match match_captures);
 
 1;
@@ -81,11 +127,17 @@ Catalyst::ActionRole::QueryParameter - Dispatch rules using query parameters
       action_roles => ['QueryParameter'],
     );
 
-    ## Match an incoming request matching "http://myhost/path?page"
+    ## Match an incoming request matching "http://myhost/path?page=1"
     sub paged_results : Path('foo') QueryParam('page') { ... }
 
     ## Match an incoming request matching "http://myhost/path"
     sub no_paging : Path('foo') QueryParam('!page') { ... }
+
+    ## Match a request using a type constraint
+
+    use Types::Standard 'Int';
+    sub an_int :Path('foo') QueryParam('page:Int') { ... }
+
 
 =head1 DESCRIPTION
 
@@ -131,6 +183,7 @@ Here are some example C<QueryParam> attributes and the queries they match:
     QueryParam('page:==1')  ## 'page' must equal numeric one
     QueryParam('page:>1')  ## 'page' must be great than one
     QueryParam('!page:>1')  ## 'page' must NOT be great than one
+    QueryParam(page:Int) ## 'page' matches an Int constraint (see below)
 
 Since as I mentioned, it is generally not awesome web development practice to
 make excessive use of query parameters for mapping your action logic, I have
@@ -149,8 +202,42 @@ In addition, we support the regular expression match operator C<=~>. For
 documentation on Perl Relational Operators see: C<perldoc perlop>.  For 
 documentation on Perl Regular Expressions see C<perldoc perlre>.
 
-The condition will be wrapped in an C<eval> and any exceptions generated will
-be taken to mean the pattern has not matched.
+A C<$condition> may also be a L<Moose::Types> or similar type constraint.  See
+below for more.
+
+B<NOTE> For numeric comparisions we first check that the value 'looks_like_number'
+via L<Scalar::Util> before doing the comparison.  If it doesn't look like a
+number that is automatic fail.
+
+=head1 USING TYPE CONSTRAINTS
+
+To provide more flexibility and reuse in your parameter constraints, you may
+use types constraints as your constraint condition if you are using a recent
+build of L<Catalyst> (at least version 5.90090 or greater).  This allows you to
+use an imported type constraint, such as you might get from L<MooseX::Types> 
+or from L<Type::Tiny> or L<Types::Standard>.  For example:
+
+    package MyApp::Controller::Root;
+
+    use base 'Catalyst::Controller';
+    use Types::Standard 'Int';
+
+    sub root :Chained(/) PathPart('') CaptureArgs(0) { }
+
+      sub int :Chained(root) Args(0) QueryParam(page:Int) {
+        my ($self, $c) = @_;
+        $c->res->body('order');
+      }
+
+    MyApp::Controller::Root->config(
+      action_roles => ['QueryParameter'],
+    );
+
+This would require a URL with a 'page' query that is an Integer, for example,
+"https://localhost/int/100".
+
+This feature uses the type constraint resolution features built into the
+new versions of L<Catalyst> so it behaves the same way.
 
 =head1 USING CATALYST CONFIGURATION INSTEAD OF ATTRIBUTES
 
@@ -189,54 +276,20 @@ example above (that is not a typo!)
 
 =head1 NOTE REGARDING CATALYST DISPATCH RESOLUTION
 
-When several actions match the path of an incoming request, such as in the
-following example:
+This document has been superceded by a new core documentation document.  Please
+see L<Catalyst::RouteMatching>.
 
-    sub no_query : Path('foo') {
-      my ($self, $ctx) = @_;
-      $ctx->response->body('no_query');
-    }
+=head1 LIMITATIONS
 
-    sub page : Path('foo') QueryParam('page') {
-      my ($self, $ctx) = @_;
-      $ctx->response->body('page');
-    }
+Currently this only works for 'single' query parameters.  For example:
 
-L<Catayst> will call the C<match> method on each in turn until it finds one
-that returns a successful match.  This matching process starts from the
-bottom up (or last to first), which means that you should place your most
-specific matches at the bottom and your least specific or 'catch all' actions
-at the top.
+    ?foo=1&bar=2
 
-HOWEVER, if you are using Chained actions L<Catalyst::DispatchType::Chained>
-then the order resolution is REVERSED from the above example.  In other words
-we start with the first action and proceed downwards.  This means that when you
-are Chaining, you should place you most specific matches FIRST (nearest the top
-of the Controller file) and least specific or default actions LAST.
+Not:
 
-For example:
+    ?foo=1&foo=2
 
-    sub root : Chained('/') PathPrefix CaptureArgs(0) {}
-
-      sub page_and_row
-      : Chained('root') PathPart('') QueryParam('page') QueryParam('row') Args(0)
-      {
-        my ($self, $ctx) = @_;
-        $ctx->response->body('page_and_row');
-      }
-
-      sub page : Chained('root') PathPart('')  QueryParam('page') Args(0)  {
-        my ($self, $ctx) = @_;
-        $ctx->response->body('page');
-      }
-
-      sub no_query : Chained('root') PathPart('') Args(0)  {
-        my ($self, $ctx) = @_;
-        $ctx->response->body('no_query');
-      }
-
-
-The test suite has a working example of this for your review.
+Patches welcomed!
 
 =head1 AUTHOR
 
